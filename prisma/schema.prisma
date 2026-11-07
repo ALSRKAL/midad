@@ -1,0 +1,1194 @@
+// Midad data model — the single source of truth for the database.
+//
+// Rules encoded here (see docs/ARCHITECTURE.md §4 and docs/BUSINESS_RULES.md):
+//   • every monetary amount is an Int in minor units (halalas/cents) — never Float (BR-05);
+//   • uniqueness that a business rule depends on is a database constraint, not app-only logic
+//     (enrollment BR-09, review BR-18, certificate BR-17, webhook idempotency BR-08);
+//   • every foreign key and every filtered/sorted column has an explicit index;
+//   • LedgerEntry is append-only: no update/delete path exists in any service (BR-12);
+//   • users are soft-deleted; banning is a status change plus session invalidation (BR-21).
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  // Trigram search support for the Arabic-folded columns (the product requirements).
+  extensions = [pg_trgm]
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  STUDENT
+  INSTRUCTOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  BANNED
+  DELETED
+}
+
+enum Locale {
+  AR
+  EN
+}
+
+enum Theme {
+  LIGHT
+  DARK
+  SYSTEM
+}
+
+enum CourseStatus {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  REJECTED
+  UNLISTED
+  ARCHIVED
+}
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  ALL_LEVELS
+}
+
+enum ContentLanguage {
+  AR
+  EN
+}
+
+enum LessonType {
+  VIDEO
+  TEXT
+  FILE
+  QUIZ
+}
+
+enum VideoStatus {
+  UPLOADING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum VideoProvider {
+  HLS
+  MUX
+}
+
+enum EnrollmentSource {
+  PURCHASE
+  FREE
+  ADMIN
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum QuestionType {
+  SINGLE_CHOICE
+  MULTI_CHOICE
+  TRUE_FALSE
+  SHORT_ANSWER
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  EXPIRED
+}
+
+enum InstructorApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentProvider {
+  STRIPE
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+enum LedgerEntryType {
+  SALE
+  REFUND
+  PAYOUT
+}
+
+enum PayoutStatus {
+  REQUESTED
+  APPROVED
+  PAID
+  REJECTED
+}
+
+enum CertificateStatus {
+  ISSUED
+  REVOKED
+}
+
+enum ReportTarget {
+  REVIEW
+  THREAD
+  REPLY
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+enum ContactMessageStatus {
+  NEW
+  READ
+  ARCHIVED
+}
+
+enum EmailJobStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum NotificationType {
+  WELCOME
+  EMAIL_VERIFIED
+  PURCHASE_RECEIPT
+  QUESTION_ANSWERED
+  CERTIFICATE_ISSUED
+  NEW_LESSON
+  COURSE_REVIEW_DECISION
+  INSTRUCTOR_APPLICATION_DECISION
+  ANNOUNCEMENT
+  REFUND_DECISION
+  PAYOUT_DECISION
+  SYSTEM
+}
+
+// ---------------------------------------------------------------------------
+// Identity (Better Auth core tables + Midad profile fields)
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String     @id
+  name          String
+  email         String     @unique
+  emailVerified Boolean    @default(false)
+  image         String?
+  /// Public blurb shown on the account page (the product requirements).
+  bio           String?
+  username      String?    @unique
+  role          Role       @default(STUDENT)
+  status        UserStatus @default(ACTIVE)
+  locale        Locale     @default(AR)
+  theme         Theme      @default(SYSTEM)
+  /// Preferred numbering system for Arabic (ADR-0008).
+  numberingSystem String   @default("latn")
+  banReason     String?
+  bannedAt      DateTime?
+  /// Fields required by Better Auth's admin plugin (impersonation, P05-T03).
+  banned        Boolean    @default(false)
+  banExpires    DateTime?
+  /// Soft delete (the product requirements); the row and its history are kept.
+  deletedAt     DateTime?
+  /// Notification preferences (the product requirements); the fan-out in P09 reads them before sending.
+  notifyReplies        Boolean @default(true)
+  notifyAnnouncements  Boolean @default(true)
+  notifyProductUpdates Boolean @default(false)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  sessions              Session[]
+  accounts              Account[]
+  instructorProfile     InstructorProfile?
+  instructorApplications InstructorApplication[] @relation("Applicant")
+  reviewedApplications  InstructorApplication[] @relation("ApplicationReviewer")
+  enrollments           Enrollment[]
+  quizAttempts          QuizAttempt[]
+  certificates          Certificate[]
+  notes                 Note[]
+  threads               Thread[]
+  replies               Reply[]
+  reviews               Review[]
+  wishlist              Wishlist[]
+  streakDays            StreakDay[]
+  cartItems             CartItem[]
+  orders                Order[]
+  refundsRequested      Refund[]                @relation("RefundRequester")
+  refundsDecided        Refund[]                @relation("RefundDecider")
+  payoutsDecided        Payout[]                @relation("PayoutDecider")
+  couponsCreated        Coupon[]
+  couponRedemptions     CouponRedemption[]
+  notifications         Notification[]
+  announcements         Announcement[]
+  reportsFiled          Report[]                @relation("Reporter")
+  reportsResolved       Report[]                @relation("ReportResolver")
+  auditLogs             AuditLog[]
+  courseReviewNotes     CourseReviewNote[]
+
+  @@index([role, status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Session {
+  id        String   @id
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  /// Set by Better Auth's admin plugin when an admin impersonates this user (P05-T03).
+  impersonatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  /// Hashed password for the credential provider (never returned by queries).
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@unique([providerId, accountId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([identifier])
+  @@index([expiresAt])
+  @@map("verifications")
+}
+
+model InstructorProfile {
+  id                   String    @id @default(cuid())
+  userId               String    @unique
+  headline             String?
+  bioAr                String?
+  bioEn                String?
+  websiteUrl           String?
+  twitterUrl           String?
+  linkedinUrl          String?
+  /// Encrypted at rest; decrypted only for the payout flow.
+  payoutDetailsEncrypted String?
+  approvedAt           DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courses      Course[]
+  orderItems   OrderItem[]
+  ledgerEntries LedgerEntry[]
+  payouts      Payout[]
+
+  @@index([approvedAt])
+  @@map("instructor_profiles")
+}
+
+model InstructorApplication {
+  id             String                      @id @default(cuid())
+  userId         String
+  status         InstructorApplicationStatus @default(PENDING)
+  experience     String
+  field          String
+  portfolioUrl   String?
+  sampleVideoUrl String?
+  reason         String?
+  reviewedById   String?
+  reviewedAt     DateTime?
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  user       User  @relation("Applicant", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("ApplicationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status, createdAt])
+  @@index([reviewedById])
+  @@map("instructor_applications")
+}
+
+// ---------------------------------------------------------------------------
+// Catalog
+// ---------------------------------------------------------------------------
+
+model Category {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  nameAr    String
+  nameEn    String
+  icon      String?
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courses Course[]
+
+  @@index([isActive, sortOrder])
+  @@map("categories")
+}
+
+model Course {
+  id             String         @id @default(cuid())
+  slug           String         @unique
+  instructorId   String
+  categoryId     String
+  titleAr        String?
+  titleEn        String?
+  subtitleAr     String?
+  subtitleEn     String?
+  descriptionAr  String?
+  descriptionEn  String?
+  level          CourseLevel    @default(ALL_LEVELS)
+  /// Spoken language of the content — independent from the interface locale.
+  language       ContentLanguage @default(AR)
+  priceCents     Int            @default(0)
+  currency       String         @default("SAR")
+  isFree         Boolean        @default(false)
+  status         CourseStatus   @default(DRAFT)
+  coverImageKey  String?
+  promoVideoKey  String?
+  /// Average rating ×100 (0–500) to keep integers everywhere; display divides by 100.
+  ratingAvg      Int            @default(0)
+  ratingCount    Int            @default(0)
+  studentsCount  Int            @default(0)
+  totalDurationSec Int          @default(0)
+  /// Normalised (Arabic-folded) text for pg_trgm search (the product requirements).
+  titleNormalized String?
+  descriptionNormalized String?
+  publishedAt    DateTime?
+  rejectionReason String?
+  archivedAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  instructor     InstructorProfile @relation(fields: [instructorId], references: [id], onDelete: Restrict)
+  category       Category          @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  objectives     CourseObjective[]
+  requirements   CourseRequirement[]
+  sections       Section[]
+  enrollments    Enrollment[]
+  reviews        Review[]
+  wishlists      Wishlist[]
+  threads        Thread[]
+  cartItems      CartItem[]
+  orderItems     OrderItem[]
+  coupons        Coupon[]
+  announcements  Announcement[]
+  reviewNotes    CourseReviewNote[]
+  certificates   Certificate[]
+
+  @@index([status, publishedAt])
+  @@index([status, ratingAvg])
+  @@index([status, priceCents])
+  @@index([categoryId, status])
+  @@index([instructorId, status])
+  @@index([level])
+  @@index([language])
+  @@index([totalDurationSec])
+  @@index([titleNormalized(ops: raw("gin_trgm_ops"))], type: Gin, map: "courses_title_normalized_trgm_idx")
+  @@index([descriptionNormalized(ops: raw("gin_trgm_ops"))], type: Gin, map: "courses_description_normalized_trgm_idx")
+  @@map("courses")
+}
+
+model CourseObjective {
+  id       String @id @default(cuid())
+  courseId String
+  sortOrder Int   @default(0)
+  textAr   String
+  textEn   String
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId, sortOrder])
+  @@map("course_objectives")
+}
+
+model CourseRequirement {
+  id       String @id @default(cuid())
+  courseId String
+  sortOrder Int   @default(0)
+  textAr   String
+  textEn   String
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId, sortOrder])
+  @@map("course_requirements")
+}
+
+model Section {
+  id        String   @id @default(cuid())
+  courseId  String
+  titleAr   String
+  titleEn   String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons Lesson[]
+
+  @@index([courseId, sortOrder])
+  @@map("sections")
+}
+
+model Lesson {
+  id          String     @id @default(cuid())
+  sectionId   String
+  type        LessonType
+  titleAr     String
+  titleEn     String
+  sortOrder   Int        @default(0)
+  isPreview   Boolean    @default(false)
+  durationSec Int        @default(0)
+  /// Sanitized HTML for TEXT lessons (never raw editor output).
+  contentAr   String?
+  contentEn   String?
+  isPublished Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  section     Section          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  videoAsset  VideoAsset?
+  quiz        Quiz?
+  attachments Attachment[]
+  progress    LessonProgress[]
+  notes       Note[]
+  threads     Thread[]
+
+  @@index([sectionId, sortOrder])
+  @@index([type])
+  @@index([isPreview])
+  @@map("lessons")
+}
+
+model VideoAsset {
+  id              String        @id @default(cuid())
+  lessonId        String        @unique
+  provider        VideoProvider @default(HLS)
+  status          VideoStatus   @default(UPLOADING)
+  originalKey     String
+  hlsKey          String?
+  thumbnailKey    String?
+  /// Optional WebVTT caption track, served by a short-lived signed URL like the video (BR-20).
+  captionsKey     String?
+  durationSec     Int           @default(0)
+  sizeBytes       BigInt?
+  uploadId        String?
+  errorMessage    String?
+  processedAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("video_assets")
+}
+
+model Attachment {
+  id        String   @id @default(cuid())
+  lessonId  String
+  titleAr   String
+  titleEn   String
+  fileKey   String
+  mimeType  String
+  sizeBytes Int
+  createdAt DateTime @default(now())
+
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId])
+  @@map("attachments")
+}
+
+model CourseReviewNote {
+  id        String   @id @default(cuid())
+  courseId  String
+  adminId   String
+  note      String
+  createdAt DateTime @default(now())
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  admin  User   @relation(fields: [adminId], references: [id], onDelete: Restrict)
+
+  @@index([courseId, createdAt])
+  @@index([adminId])
+  @@map("course_review_notes")
+}
+
+// ---------------------------------------------------------------------------
+// Quizzes
+// ---------------------------------------------------------------------------
+
+model Quiz {
+  id               String  @id @default(cuid())
+  lessonId         String  @unique
+  titleAr          String
+  titleEn          String
+  descriptionAr    String?
+  descriptionEn    String?
+  /// Pass mark as a percentage (BR-16 default 70).
+  passPct          Int     @default(70)
+  maxAttempts      Int     @default(3)
+  timeLimitSec     Int?
+  shuffleQuestions Boolean @default(false)
+  shuffleOptions   Boolean @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  lesson    Lesson         @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  questions Question[]
+  attempts  QuizAttempt[]
+
+  @@map("quizzes")
+}
+
+model Question {
+  id            String       @id @default(cuid())
+  quizId        String
+  type          QuestionType
+  promptAr      String
+  promptEn      String
+  explanationAr String?
+  explanationEn String?
+  points        Int          @default(1)
+  sortOrder     Int          @default(0)
+  /// For SHORT_ANSWER: accepted answers (normalised) — never serialised to the client.
+  acceptedAnswers Json?
+
+  quiz    Quiz    @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  options Option[]
+
+  @@index([quizId, sortOrder])
+  @@map("questions")
+}
+
+model Option {
+  id         String  @id @default(cuid())
+  questionId String
+  textAr     String
+  textEn     String
+  /// Correctness is enforced server-side; queries must never select this for the client (BR-16).
+  isCorrect  Boolean @default(false)
+  sortOrder  Int     @default(0)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId, sortOrder])
+  @@map("options")
+}
+
+model QuizAttempt {
+  id           String        @id @default(cuid())
+  quizId       String
+  userId       String
+  enrollmentId String
+  status       AttemptStatus @default(IN_PROGRESS)
+  startedAt    DateTime      @default(now())
+  expiresAt    DateTime?
+  submittedAt  DateTime?
+  score        Int           @default(0)
+  maxScore     Int           @default(0)
+  passed       Boolean       @default(false)
+  /// Submitted answers only; graded on the server.
+  answers      Json?
+
+  quiz       Quiz       @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  @@index([quizId, userId])
+  @@index([enrollmentId])
+  @@index([status])
+  @@map("quiz_attempts")
+}
+
+// ---------------------------------------------------------------------------
+// Learning
+// ---------------------------------------------------------------------------
+
+model Enrollment {
+  id          String           @id @default(cuid())
+  userId      String
+  courseId    String
+  source      EnrollmentSource @default(PURCHASE)
+  status      EnrollmentStatus @default(ACTIVE)
+  progressPct Int              @default(0)
+  orderId     String?
+  createdAt   DateTime         @default(now())
+  completedAt DateTime?
+  revokedAt   DateTime?
+
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course        Course          @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  order         Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  lessonProgress LessonProgress[]
+  quizAttempts  QuizAttempt[]
+  certificate   Certificate?
+
+  @@unique([userId, courseId])
+  @@index([courseId])
+  @@index([status])
+  @@index([orderId])
+  @@map("enrollments")
+}
+
+model LessonProgress {
+  id             String    @id @default(cuid())
+  enrollmentId   String
+  lessonId       String
+  completedAt    DateTime?
+  lastPositionSec Int      @default(0)
+  /// Watched intervals as [[start,end],…] so seeking cannot fake completion (BR-14).
+  watchedSegments Json?
+  updatedAt      DateTime  @updatedAt
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  lesson     Lesson     @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([enrollmentId, lessonId])
+  @@index([lessonId])
+  @@index([completedAt])
+  @@map("lesson_progress")
+}
+
+model Certificate {
+  id            String            @id @default(cuid())
+  userId        String
+  courseId      String
+  enrollmentId  String            @unique
+  code          String            @unique
+  /// Frozen at issue time so a later rename cannot alter an issued certificate (BR-17).
+  recipientName String
+  status        CertificateStatus @default(ISSUED)
+  issuedAt      DateTime          @default(now())
+  pdfKey        String?
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course     Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+  @@index([courseId])
+  @@index([issuedAt])
+  @@map("certificates")
+}
+
+model Note {
+  id           String   @id @default(cuid())
+  userId       String
+  lessonId     String
+  body         String
+  timestampSec Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([userId, lessonId])
+  @@index([lessonId])
+  @@map("notes")
+}
+
+model Thread {
+  id              String   @id @default(cuid())
+  courseId        String
+  lessonId        String?
+  authorId        String
+  title           String
+  body            String
+  isResolved      Boolean  @default(false)
+  acceptedReplyId String?
+  isHidden        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  course   Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lesson   Lesson? @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  author   User    @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  replies  Reply[]
+
+  @@index([courseId, createdAt])
+  @@index([lessonId])
+  @@index([authorId])
+  @@index([isResolved])
+  @@map("threads")
+}
+
+model Reply {
+  id                String   @id @default(cuid())
+  threadId          String
+  authorId          String
+  body              String
+  isInstructorAnswer Boolean @default(false)
+  isHidden          Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@index([authorId])
+  @@map("replies")
+}
+
+model Review {
+  id             String    @id @default(cuid())
+  userId         String
+  courseId       String
+  rating         Int
+  body           String?
+  instructorReply String?
+  instructorRepliedAt DateTime?
+  isHidden       Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+  @@index([courseId, createdAt])
+  @@index([courseId, rating])
+  @@map("reviews")
+}
+
+model Wishlist {
+  id        String   @id @default(cuid())
+  userId    String
+  courseId  String
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+  @@index([courseId])
+  @@map("wishlist_items")
+}
+
+model StreakDay {
+  id            String   @id @default(cuid())
+  userId        String
+  day           DateTime @db.Date
+  activityCount Int      @default(1)
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, day])
+  @@index([userId, day])
+  @@map("streak_days")
+}
+
+// ---------------------------------------------------------------------------
+// Commerce
+// ---------------------------------------------------------------------------
+
+model CartItem {
+  id        String   @id @default(cuid())
+  userId    String
+  courseId  String
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+  @@index([courseId])
+  @@map("cart_items")
+}
+
+model Coupon {
+  id             String     @id @default(cuid())
+  code           String     @unique
+  type           CouponType
+  percentage     Int?
+  amountOffCents Int?
+  /// null = platform-wide (admin); set = one course (instructor, own course only) — BR-07.
+  courseId       String?
+  createdById    String
+  startsAt       DateTime
+  endsAt         DateTime
+  maxRedemptions Int?
+  maxPerUser     Int        @default(1)
+  minCartCents   Int        @default(0)
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  course       Course?            @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  createdBy    User               @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  redemptions  CouponRedemption[]
+
+  @@index([courseId])
+  @@index([createdById])
+  @@index([isActive, startsAt, endsAt])
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id        String   @id @default(cuid())
+  couponId  String
+  userId    String
+  orderId   String
+  amountOffCents Int
+  createdAt DateTime @default(now())
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Restrict)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([couponId, userId])
+  @@index([userId])
+  @@index([orderId])
+  @@map("coupon_redemptions")
+}
+
+model Order {
+  id               String      @id @default(cuid())
+  userId           String
+  status           OrderStatus @default(PENDING)
+  currency         String      @default("SAR")
+  subtotalCents    Int
+  discountCents    Int         @default(0)
+  taxCents         Int         @default(0)
+  totalCents       Int
+  vatBps           Int         @default(1500)
+  /// The coupon chosen at checkout, frozen on the order. Its redemption is written only on payment.
+  couponId         String?
+  couponCode       String?
+  stripeSessionId  String?     @unique
+  invoiceKey       String?
+  createdAt        DateTime    @default(now())
+  paidAt           DateTime?
+  updatedAt        DateTime    @updatedAt
+
+  user             User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items            OrderItem[]
+  payment          Payment?
+  refunds          Refund[]
+  couponRedemptions CouponRedemption[]
+  enrollments      Enrollment[]
+  ledgerEntries    LedgerEntry[]
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([paidAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                  String @id @default(cuid())
+  orderId             String
+  courseId            String
+  instructorProfileId String
+  /// All values frozen at sale time (BR-11) — later rate changes never rewrite history.
+  unitPriceCents      Int
+  discountCents       Int    @default(0)
+  commissionBps       Int
+  instructorShareCents Int
+  titleSnapshot       String
+  createdAt           DateTime @default(now())
+
+  order             Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  course            Course            @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  instructorProfile InstructorProfile @relation(fields: [instructorProfileId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([courseId])
+  @@index([instructorProfileId])
+  @@map("order_items")
+}
+
+model Payment {
+  id                    String          @id @default(cuid())
+  orderId               String          @unique
+  provider              PaymentProvider @default(STRIPE)
+  status                PaymentStatus   @default(PENDING)
+  amountCents           Int
+  currency              String          @default("SAR")
+  stripePaymentIntentId String?
+  stripeEventId         String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("payments")
+}
+
+model Refund {
+  id            String       @id @default(cuid())
+  orderId       String
+  requestedById String
+  status        RefundStatus @default(REQUESTED)
+  reason        String
+  amountCents   Int
+  decidedById   String?
+  decidedAt     DateTime?
+  decisionNote  String?
+  stripeRefundId String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  order       Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  requestedBy User   @relation("RefundRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+  decidedBy   User?  @relation("RefundDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  ledgerEntries LedgerEntry[]
+
+  @@index([orderId])
+  @@index([requestedById])
+  @@index([status])
+  @@map("refunds")
+}
+
+model LedgerEntry {
+  id                  String          @id @default(cuid())
+  instructorProfileId String
+  type                LedgerEntryType
+  /// Signed amount: positive credits the instructor, negative debits (refund / payout).
+  amountCents         Int
+  currency            String          @default("SAR")
+  orderId             String?
+  refundId            String?
+  payoutId            String?
+  description         String?
+  createdAt           DateTime        @default(now())
+
+  instructorProfile InstructorProfile @relation(fields: [instructorProfileId], references: [id], onDelete: Restrict)
+  order             Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  refund            Refund?           @relation(fields: [refundId], references: [id], onDelete: SetNull)
+  payout            Payout?           @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+
+  @@index([instructorProfileId, createdAt])
+  @@index([type])
+  @@index([orderId])
+  @@index([refundId])
+  @@index([payoutId])
+  @@map("ledger_entries")
+}
+
+model Payout {
+  id                  String       @id @default(cuid())
+  instructorProfileId String
+  amountCents         Int
+  currency            String       @default("SAR")
+  status              PayoutStatus @default(REQUESTED)
+  transferReference   String?
+  decidedById         String?
+  decidedAt           DateTime?
+  paidAt              DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  instructorProfile InstructorProfile @relation(fields: [instructorProfileId], references: [id], onDelete: Restrict)
+  decidedBy         User?             @relation("PayoutDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  ledgerEntries     LedgerEntry[]
+
+  @@index([instructorProfileId, status])
+  @@index([status, createdAt])
+  @@map("payouts")
+}
+
+model ProcessedWebhookEvent {
+  /// Stripe event id — the primary key is what makes fulfillment idempotent (BR-08).
+  id          String   @id
+  type        String
+  processedAt DateTime @default(now())
+
+  @@index([type])
+  @@map("processed_webhook_events")
+}
+
+// ---------------------------------------------------------------------------
+// System
+// ---------------------------------------------------------------------------
+
+
+model EmailJob {
+  id        String        @id @default(cuid())
+  to        String
+  template  String
+  locale    String        @default("ar")
+  data      Json
+  status    EmailJobStatus @default(PENDING)
+  attempts  Int           @default(0)
+  lastError String?
+  createdAt DateTime      @default(now())
+  sentAt    DateTime?
+
+  @@index([status, createdAt])
+  @@map("email_jobs")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String?
+  data      Json?
+  linkPath  String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+model Announcement {
+  id        String   @id @default(cuid())
+  courseId  String
+  authorId  String
+  title     String
+  body      String
+  createdAt DateTime @default(now())
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  author User   @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([courseId, createdAt])
+  @@index([authorId])
+  @@map("announcements")
+}
+
+model Report {
+  id           String       @id @default(cuid())
+  targetType   ReportTarget
+  targetId     String
+  reporterId   String
+  reason       String
+  details      String?
+  status       ReportStatus @default(OPEN)
+  resolvedById String?
+  resolvedAt   DateTime?
+  createdAt    DateTime     @default(now())
+
+  reporter   User  @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  resolvedBy User? @relation("ReportResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([targetType, targetId])
+  @@index([status, createdAt])
+  @@index([reporterId])
+  @@map("reports")
+}
+
+model ContactMessage {
+  id        String               @id @default(cuid())
+  name      String
+  email     String
+  subject   String
+  message   String
+  status    ContactMessageStatus @default(NEW)
+  createdAt DateTime             @default(now())
+
+  @@index([status, createdAt])
+  @@map("contact_messages")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  before    Json?
+  after     Json?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([entity, entityId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+model PlatformSetting {
+  key         String   @id
+  value       Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  @@map("platform_settings")
+}

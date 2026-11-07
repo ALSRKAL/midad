@@ -1,0 +1,16 @@
+.next/
+node_modules/
+coverage/
+playwright-report/
+test-results/
+pnpm-lock.yaml
+skills-lock.json
+.agents/
+.claude/
+.mimosa/
+.playwright-mcp/
+public/media/
+docs/screenshots/
+*.lottie
+# The binding specification is preserved byte-for-byte.
+PROMPT.md

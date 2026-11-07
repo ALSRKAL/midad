@@ -1,0 +1,27 @@
+# Gitleaks configuration for Midad.
+# Run by the pre-commit hook (scripts/gitleaks-staged.sh) and by CI.
+
+title = "Midad secrets policy"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented placeholders and generated lockfiles, not credentials"
+paths = [
+  '''^\.env\.example$''',
+  '''^pnpm-lock\.yaml$''',
+  '''^skills-lock\.json$''',
+  '''^docs/screenshots/''',
+]
+regexTarget = "match"
+regexes = [
+  # Local, non-secret defaults that must be visible to every developer.
+  '''midad-dev-secret''',
+  '''postgres(ql)?://midad:midad@''',
+  # Stripe test-mode identifiers documented in the README for E2E runs.
+  '''pk_test_[A-Za-z0-9]{4,}''',
+  # The shared password for every seeded test account. It is printed in README § Test accounts
+  # and exists only in dev/test databases; it is not a credential to anything real.
+  '''Midad-Test-2026''',
+]

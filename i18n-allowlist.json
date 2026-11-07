@@ -1,0 +1,4 @@
+{
+  "$comment": "Account.languageAr/languageEn are language endonyms: a language picker must show each language in its own script in every interface language. InstructorProfile.linkedin is the LinkedIn brand name, which is not translated. LessonContent.english is the English editor's heading and is also an endonym.",
+  "allowIdentical": ["Account.languageAr", "Account.languageEn", "InstructorProfile.linkedin", "LessonContent.english"]
+}

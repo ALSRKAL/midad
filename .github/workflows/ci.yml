@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Local-equivalent values. Secrets are never hard-coded: the app is test mode only here.
+  NODE_ENV: test
+  NEXT_TELEMETRY_DISABLED: "1"
+  APP_URL: http://127.0.0.1:3100
+  NEXT_PUBLIC_SITE_URL: http://127.0.0.1:3100
+  NEXT_PUBLIC_DEFAULT_LOCALE: ar
+  NEXT_PUBLIC_DEFAULT_CURRENCY: SAR
+  DATABASE_URL: postgresql://midad:midad@localhost:5432/midad
+  REDIS_URL: redis://localhost:6379
+  S3_ENDPOINT: http://localhost:9000
+  S3_REGION: us-east-1
+  S3_ACCESS_KEY_ID: midad
+  S3_SECRET_ACCESS_KEY: midad-dev-secret
+  S3_BUCKET_PUBLIC: midad-public
+  S3_BUCKET_PRIVATE: midad-media
+  S3_FORCE_PATH_STYLE: "true"
+  AUTH_SECRET: ci-only-secret-value-that-is-at-least-32-chars
+  AUTH_EMAIL_FROM: no-reply@midad.example
+  SMTP_HOST: localhost
+  SMTP_PORT: "1025"
+  SMTP_SECURE: "false"
+  VIDEO_PROVIDER: hls
+  CLOCK_OFFSET_MS: "0"
+  DEFAULT_CURRENCY: SAR
+  PLATFORM_COMMISSION_BPS: "7000"
+  VAT_BPS: "1500"
+  MAINTENANCE_MODE: "false"
+  ALLOW_SEED_IN_PRODUCTION: "false"
+
+jobs:
+  quality:
+    name: lint · typecheck · i18n · unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: i18n keys
+        run: pnpm i18n:check
+      - name: Formatting
+        run: pnpm format:check
+      - name: Unit + integration tests with coverage
+        run: pnpm test
+      - name: Commit messages (all commits in the PR)
+        if: github.event_name == 'pull_request'
+        run: pnpm exec commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.sha }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+  secrets:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-and-e2e:
+    name: build · e2e
+    runs-on: ubuntu-latest
+    needs: quality
+    services:
+      postgres:
+        image: postgres:16.15-alpine
+        env:
+          POSTGRES_USER: midad
+          POSTGRES_PASSWORD: midad
+          POSTGRES_DB: midad
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U midad -d midad"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build and run the E2E suite against the production build
+        run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

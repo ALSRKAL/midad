@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+# Runs on every commit. Every step must pass for the commit to be created.
+set -e
+
+echo "▸ lint-staged (eslint --fix + prettier on staged files)"
+pnpm exec lint-staged
+
+echo "▸ typecheck"
+pnpm -s typecheck
+
+echo "▸ secret scan (gitleaks, staged diff)"
+sh scripts/gitleaks-staged.sh
+
+echo "▸ i18n:check"
+pnpm -s i18n:check

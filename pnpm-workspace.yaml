@@ -1,0 +1,20 @@
+# pnpm settings live here from pnpm 10.16+ (package.json's `pnpm` field is no longer read).
+#
+# Build scripts of native/postinstall packages must be explicitly approved — a supply-chain
+# safety default we keep. Every entry below is a package we intentionally trust to run a
+# postinstall step (native binary / codegen), not a blanket "allow everything".
+allowBuilds:
+  esbuild: true # Vitest / Rollup bundler binary
+  "@tailwindcss/oxide": true # Tailwind v4 native scanner
+  sharp: true # image optimisation used by next/image
+  unrs-resolver: true # eslint-import-resolver-typescript native resolver
+  prisma: true # Prisma CLI engines (added in P01-T01)
+  "@prisma/client": true # Prisma query engine (added in P01-T01)
+  "@prisma/engines": true # Prisma engine downloads (added in P01-T01)
+  "@parcel/watcher": true # next-intl message catalogue watcher (added in P01-T03)
+  "@swc/core": true # native compiler used by next-intl's tooling (added in P01-T03)
+
+# Security override (P11-T03): AWS SDK 3.956 pins a fast-xml-parser with high/critical advisories.
+# 5.12.0 contains the entity-expansion, numeric-entity and XMLBuilder fixes.
+overrides:
+  fast-xml-parser: 5.12.0

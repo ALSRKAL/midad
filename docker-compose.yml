@@ -1,0 +1,175 @@
+# Local development infrastructure for Midad.
+#
+#   pnpm dev:up      -> start every service and wait until all are healthy
+#   pnpm dev:down    -> stop the services (data is kept)
+#   pnpm dev:reset   -> stop and delete the volumes (fresh database + storage)
+#   pnpm dev:stripe  -> additionally run the Stripe CLI webhook forwarder (needs STRIPE_SECRET_KEY)
+#
+# Host ports are deliberately offset from the defaults (Postgres 5433, Redis 6380)
+# so the stack can coexist with a Postgres/Redis already installed on the machine.
+# Every value is overridable from .env — see .env.example.
+
+name: midad
+
+services:
+  postgres:
+    image: postgres:16.15-alpine
+    container_name: midad-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-midad}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-midad}
+      POSTGRES_DB: ${POSTGRES_DB:-midad}
+      TZ: UTC
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    # pg_stat_statements is required by P14-T04's slow-query review; it is a diagnostic extension
+    # with negligible overhead and does not change application semantics. The connection ceiling
+    # leaves room for eight web replicas, the E2E/fixture servers and maintenance sessions; the
+    # default 100 was exhausted during the P15-T02 200-VU run (P2037 TooManyConnections).
+    command:
+      [
+        "postgres",
+        "-c",
+        "shared_preload_libraries=pg_stat_statements",
+        "-c",
+        "pg_stat_statements.track=all",
+        "-c",
+        "max_connections=300",
+      ]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: midad-redis
+    restart: unless-stopped
+    command: [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--appendfsync",
+        "everysec",
+        # Queue and rate-limit keys must never be evicted silently.
+        "--maxmemory-policy",
+        "noeviction",
+      ]
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 5s
+
+  # S3-compatible object storage. The upstream MinIO Docker Hub images were withdrawn,
+  # so a maintained mirror is pinned by digest (ADR-0011 in docs/DECISIONS.md).
+  storage:
+    image: elestio/minio@sha256:25348a257f1ece1b192f25f6cd9854618fa86422ac87b494b5d4e629c556d4bd
+    container_name: midad-storage
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-midad}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-midad-dev-secret}
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - storage-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  # One-shot job: create the buckets the app expects, idempotently.
+  #   midad-public  -> course covers, avatars, thumbnails (anonymous read)
+  #   midad-media   -> videos, attachments, invoices (private; short-lived signed URLs, BR-20)
+  storage-init:
+    image: elestio/minio@sha256:25348a257f1ece1b192f25f6cd9854618fa86422ac87b494b5d4e629c556d4bd
+    container_name: midad-storage-init
+    restart: "no"
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        mc alias set local http://storage:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing local/${S3_BUCKET_PUBLIC:-midad-public}
+        mc mb --ignore-existing local/${S3_BUCKET_PRIVATE:-midad-media}
+        mc anonymous set download local/${S3_BUCKET_PUBLIC:-midad-public}
+        mc anonymous set none local/${S3_BUCKET_PRIVATE:-midad-media}
+        echo "buckets ready"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-midad}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-midad-dev-secret}
+      S3_BUCKET_PUBLIC: ${S3_BUCKET_PUBLIC:-midad-public}
+      S3_BUCKET_PRIVATE: ${S3_BUCKET_PRIVATE:-midad-media}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://storage:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # SMTP trap with a web UI: http://localhost:8025
+  mail:
+    image: axllent/mailpit:v1.33.1
+    container_name: midad-mail
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: "1000"
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+      MP_UI_AUTH: ""
+    ports:
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8025/livez"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 5s
+
+  # Webhook forwarder. Off by default because it needs a Stripe test secret key:
+  #   pnpm dev:stripe
+  stripe:
+    image: stripe/stripe-cli:v1.55.8
+    container_name: midad-stripe
+    profiles: ["stripe"]
+    restart: unless-stopped
+    depends_on:
+      - mail
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      STRIPE_API_KEY: ${STRIPE_SECRET_KEY:-}
+    command:
+      [
+        "listen",
+        "--forward-to",
+        "http://host.docker.internal:${APP_PORT:-3000}/api/webhooks/stripe",
+        "--skip-verify",
+        "--color",
+        "never",
+      ]
+
+volumes:
+  postgres-data:
+  redis-data:
+  storage-data:

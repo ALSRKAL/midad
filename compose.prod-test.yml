@@ -1,0 +1,79 @@
+# Production-like load/stress topology (P14-T04, P15-T02).
+#
+# Eight identical web containers run the standalone build behind nginx; HTML is cached per session
+# for 60 s. The managed services stay on the host so this file can be started on top of
+# `pnpm dev:up` without duplicating or reseeding the database.
+#
+#   docker build --target web --build-arg NEXT_PUBLIC_SITE_URL=http://127.0.0.1:8080 \
+#     -t midad-web:1.1.1 .
+#   docker compose -f compose.prod-test.yml up -d
+#   k6 run tests/load/browse.js   # BASE_URL=http://127.0.0.1:8080
+
+x-web: &web
+  image: midad-web:1.1.1
+  restart: unless-stopped
+  env_file: .env.local
+  environment:
+    NODE_ENV: production
+    PORT: "3000"
+    HOSTNAME: 0.0.0.0
+    APP_URL: http://127.0.0.1:8080
+    NEXT_PUBLIC_SITE_URL: http://127.0.0.1:8080
+    DATABASE_URL: postgresql://midad:midad@host.docker.internal:5433/midad
+    REDIS_URL: redis://host.docker.internal:6380
+    S3_ENDPOINT: http://host.docker.internal:9000
+    SMTP_HOST: host.docker.internal
+    SMTP_PORT: "1025"
+    # Setup signs in 200 load users from one IP; the functional limit is still enforced by the
+    # dedicated rate-limit suite and by the production default outside this test topology.
+    AUTH_RATE_LIMIT_MAX: "1000"
+    AUTH_RATE_LIMIT_WINDOW_SEC: "60"
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  healthcheck:
+    test:
+      [
+        "CMD",
+        "node",
+        "-e",
+        "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+      ]
+    interval: 10s
+    timeout: 5s
+    retries: 12
+    start_period: 20s
+
+services:
+  web1:
+    <<: *web
+  web2:
+    <<: *web
+  web3:
+    <<: *web
+  web4:
+    <<: *web
+  web5:
+    <<: *web
+  web6:
+    <<: *web
+  web7:
+    <<: *web
+  web8:
+    <<: *web
+
+  proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      web1:
+        condition: service_healthy
+      web2:
+        condition: service_healthy
+      web3:
+        condition: service_healthy
+      web4:
+        condition: service_healthy

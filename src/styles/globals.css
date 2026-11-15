@@ -1,0 +1,428 @@
+/*
+ * Midad design tokens — the single source of truth for colour, type, shape, elevation and motion.
+ * Documented in docs/DESIGN_SYSTEM.md §2–§5; contrast verified by tools/contrast.py.
+ *
+ * Rules enforced here:
+ *   - Variables are declared at root level (never inside @layer base).
+ *   - `@theme inline` maps them to Tailwind utilities; values are referenced, never re-wrapped.
+ *   - Hex is used directly because the tokens ARE final colours (the hsl() wrapper convention
+ *     exists only for shadcn's legacy raw-triple values).
+ *   - Dark mode is the `.dark` class on <html>, driven by next-themes (P01-T04).
+ */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ------------------------------------------------------------------ *
+ * Light theme                                                        *
+ * ------------------------------------------------------------------ */
+:root {
+  /* surfaces & text */
+  --background: #faf8f4; /* paper */
+  --foreground: #1a1f26;
+  --surface: #ffffff;
+  --surface-foreground: #1a1f26;
+  --muted: #f1ede5;
+  --muted-foreground: #5b6470;
+  --secondary: #f1ede5;
+  --secondary-foreground: #1a1f26;
+
+  /* brand */
+  --primary: #16385f; /* ink */
+  --primary-foreground: #ffffff;
+  --accent: #c8891a; /* saffron fill */
+  --accent-foreground: #1a1f26;
+  --accent-strong: #9c6712; /* saffron for glyphs/text/icons */
+  --media-bg: #0b0a09; /* video canvas: intentionally near-black in both themes */
+
+  /* status */
+  --success: #1f7a4d;
+  --success-foreground: #ffffff;
+  --warning: #a55f00;
+  --warning-foreground: #ffffff;
+  --danger: #b42318;
+  --danger-foreground: #ffffff;
+
+  /* lines & focus */
+  --border: #e6e1d8; /* decorative dividers only */
+  --border-strong: #8f887a; /* anything that identifies a control */
+  --input: #8f887a;
+  --ring: #16385f;
+
+  /* charts */
+  --chart-1: #16385f;
+  --chart-2: #9c6712;
+  --chart-3: #1f7a4d;
+  --chart-4: #5b6470;
+  --chart-5: #b42318;
+
+  /* shape */
+  --radius: 10px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* elevation (two levels only) */
+  --shadow-sm: 0 1px 2px rgb(26 31 38 / 0.06), 0 1px 1px rgb(26 31 38 / 0.04);
+  --shadow-md: 0 8px 24px -8px rgb(26 31 38 / 0.16), 0 2px 6px -2px rgb(26 31 38 / 0.08);
+
+  /* motion */
+  --ease-brand: cubic-bezier(0.2, 0, 0, 1);
+  --duration-fast: 150ms; /* hover, press, colour, opacity */
+  --duration-slow: 250ms; /* dialogs, sheets, popovers */
+
+  /* layout */
+  --container-page: 1280px;
+  --header-height: 64px;
+
+  /*
+   * Type families. The next/font variables are injected on <html> by the locale layout, so these
+   * chains resolve at render time. Arabic leads in Arabic pages and Latin leads in English pages,
+   * which is what makes each script use its intended cut instead of the other font's glyphs.
+   */
+  --font-family-body:
+    var(--font-plex-sans), var(--font-plex-arabic), ui-sans-serif, system-ui, sans-serif;
+  --font-family-heading:
+    var(--font-readex), var(--font-plex-arabic), ui-sans-serif, system-ui, sans-serif;
+  --font-family-code: var(--font-plex-mono), ui-monospace, SFMono-Regular, monospace;
+
+  /* Arabic line-heights (see html[lang="en"] below for Latin) */
+  --lh-xs: 1.7;
+  --lh-sm: 1.7;
+  --lh-base: 1.7;
+  --lh-lg: 1.7;
+  --lh-xl: 1.6;
+  --lh-2xl: 1.5;
+  --lh-3xl: 1.4;
+  --lh-4xl: 1.3;
+  --lh-5xl: 1.2;
+}
+
+/* Latin line-heights are tighter; Arabic needs the extra leading to breathe. */
+html[lang="en"] {
+  --lh-xs: 1.55;
+  --lh-sm: 1.55;
+  --lh-base: 1.55;
+  --lh-lg: 1.55;
+  --lh-xl: 1.45;
+  --lh-2xl: 1.35;
+  --lh-3xl: 1.3;
+  --lh-4xl: 1.2;
+  --lh-5xl: 1.15;
+}
+
+/* Arabic body text leads with the Arabic cut; Latin body text leads with the Latin cut. */
+html[lang="ar"] {
+  --font-family-body:
+    var(--font-plex-arabic), var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* ------------------------------------------------------------------ *
+ * Dark theme                                                         *
+ * ------------------------------------------------------------------ */
+.dark {
+  --background: #0e1217;
+  --foreground: #e8eaed;
+  --surface: #161b22;
+  --surface-foreground: #e8eaed;
+  --muted: #1f262e;
+  --muted-foreground: #9aa3ae;
+  --secondary: #1f262e;
+  --secondary-foreground: #e8eaed;
+
+  --primary: #7fa8d9;
+  --primary-foreground: #0e1217;
+  --accent: #e3a93d;
+  --accent-foreground: #0e1217;
+  --accent-strong: #e3a93d;
+
+  --success: #4ade9b;
+  --success-foreground: #0e1217;
+  --warning: #e9a23b;
+  --warning-foreground: #0e1217;
+  --danger: #f98080;
+  --danger-foreground: #0e1217;
+
+  --border: #2a313a;
+  --border-strong: #6b7684;
+  --input: #6b7684;
+  --ring: #7fa8d9;
+
+  --chart-1: #7fa8d9;
+  --chart-2: #e3a93d;
+  --chart-3: #4ade9b;
+  --chart-4: #9aa3ae;
+  --chart-5: #f98080;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 1px 1px rgb(0 0 0 / 0.3);
+  --shadow-md: 0 8px 24px -8px rgb(0 0 0 / 0.6), 0 2px 6px -2px rgb(0 0 0 / 0.4);
+}
+
+/* ------------------------------------------------------------------ *
+ * Tailwind theme mapping (@theme inline references the variables)     *
+ * ------------------------------------------------------------------ */
+@theme inline {
+  /* colours */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-foreground: var(--surface-foreground);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--surface-foreground);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--surface-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-strong: var(--accent-strong);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--danger-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* shape & elevation */
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+
+  /* layout */
+  --container-page: 1280px;
+
+  /* motion */
+  --ease-brand: var(--ease-brand);
+
+  /* typography — families are replaced by next/font variables in P01-T04 */
+  --font-sans: var(--font-family-body), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-family-heading), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-family-code), ui-monospace, SFMono-Regular, monospace;
+
+  /* typography — scale with locale-aware line heights */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: var(--lh-xs);
+  --text-xs--letter-spacing: 0.01em;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: var(--lh-sm);
+  --text-base: 1rem;
+  --text-base--line-height: var(--lh-base);
+  --text-lg: 1.125rem;
+  --text-lg--line-height: var(--lh-lg);
+  --text-xl: 1.25rem;
+  --text-xl--line-height: var(--lh-xl);
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: var(--lh-2xl);
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: var(--lh-3xl);
+  --text-4xl: 2.25rem;
+  --text-4xl--line-height: var(--lh-4xl);
+  --text-5xl: 3rem;
+  --text-5xl--line-height: var(--lh-5xl);
+}
+
+/* ------------------------------------------------------------------ *
+ * Base layer                                                          *
+ * ------------------------------------------------------------------ */
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--lh-base);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* The video player paints its focus ring as a box-shadow variable (Vidstack). */
+  .midad-player {
+    --media-focus-ring: 0 0 0 2px var(--ring);
+  }
+
+  /* Shadow-DOM media controls cannot be styled individually; the whole player frame shows focus. */
+  .midad-player:focus-within {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* Keyboard focus only, and never removed. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /*
+   * Native date/time inputs move focus between internal segments; Chromium then paints its own
+   * outline on the host with style:none, so :focus-visible alone can disappear on a keyboard pass.
+   * Keep a visible ring for any focus state on these controls.
+   */
+  input[type="date"]:focus,
+  input[type="time"]:focus,
+  input[type="datetime-local"]:focus,
+  input[type="month"]:focus,
+  input[type="week"]:focus {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* Tabular figures wherever numbers line up; applied via .tabular utility */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Rich text rendered from Tiptap and from stored lesson HTML (builder preview and player). */
+  .rich-text {
+    min-height: 10rem;
+  }
+
+  .rich-text > * + * {
+    margin-block-start: 0.75rem;
+  }
+
+  .rich-text h2 {
+    font-size: 1.25rem;
+    line-height: 1.4;
+  }
+
+  .rich-text h3 {
+    font-size: 1.125rem;
+    line-height: 1.45;
+  }
+
+  .rich-text ul {
+    list-style: disc;
+    padding-inline-start: 1.5rem;
+  }
+
+  .rich-text ol {
+    list-style: decimal;
+    padding-inline-start: 1.5rem;
+  }
+
+  .rich-text blockquote {
+    border-inline-start: 3px solid var(--accent-strong);
+    padding-inline-start: 0.75rem;
+    color: var(--muted-foreground);
+  }
+
+  .rich-text a {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .rich-text pre {
+    direction: ltr;
+    text-align: start;
+    overflow-x: auto;
+    border-radius: 0.25rem;
+    background: var(--muted);
+    padding: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+  }
+
+  .rich-text code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+  }
+
+  /* Syntax highlighting tokens, contrast-checked against the muted surface. */
+  .rich-text .hljs-keyword,
+  .rich-text .hljs-built_in,
+  .rich-text .hljs-type {
+    color: var(--accent-strong);
+  }
+
+  .rich-text .hljs-string,
+  .rich-text .hljs-attr {
+    color: var(--success);
+  }
+
+  .rich-text .hljs-number,
+  .rich-text .hljs-literal {
+    color: var(--primary);
+  }
+
+  .rich-text .hljs-comment {
+    color: var(--muted-foreground);
+    font-style: italic;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Motion is opt-out, globally. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Skip link (the product requirements — first focusable element on every page)     *
+ * ------------------------------------------------------------------ */
+@layer components {
+  .skip-link {
+    position: absolute;
+    inset-inline-start: 16px;
+    top: -100px;
+    z-index: 100;
+    border-radius: var(--radius-sm);
+    background-color: var(--primary);
+    color: var(--primary-foreground);
+    padding: 8px 16px;
+    transition: top var(--duration-fast) var(--ease-brand);
+  }
+
+  .skip-link:focus-visible {
+    top: 16px;
+  }
+}

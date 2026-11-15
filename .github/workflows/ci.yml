@@ -44,16 +44,20 @@ jobs:
   quality:
     name: lint · typecheck · i18n · unit
     runs-on: ubuntu-latest
+    env:
+      # Integration suites run against a disposable database; keep them off the build database.
+      DATABASE_URL: postgresql://midad:midad@localhost:5432/midad_test
+      TEST_DATABASE_URL: postgresql://midad:midad@localhost:5432/midad_test
     services:
       postgres:
         image: postgres:16.15-alpine
         env:
           POSTGRES_USER: midad
           POSTGRES_PASSWORD: midad
-          POSTGRES_DB: midad
+          POSTGRES_DB: midad_test
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U midad -d midad"
+          --health-cmd "pg_isready -U midad -d midad_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20

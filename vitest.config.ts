@@ -24,6 +24,10 @@ export default defineConfig({
     setupFiles: ["tests/setup.ts"],
     include: ["tests/unit/**/*.test.{ts,tsx}", "tests/integration/**/*.test.{ts,tsx}"],
     restoreMocks: true,
+    // Integration suites talk to a real database and generate PDFs; the 5s default is too tight
+    // on shared CI runners.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     reporters: process.env.CI ? ["default", "github-actions"] : ["default"],
     coverage: {
       provider: "v8",

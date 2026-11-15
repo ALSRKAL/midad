@@ -5,8 +5,8 @@ import "@testing-library/jest-dom/vitest";
  *
  * `src/env.ts` validates the environment at import time (that is the point of it), so tests must
  * provide a complete, obviously fake environment before any module that touches it is loaded.
- * Nothing here points at a real service: unit tests never open a connection, and integration tests
- * override these values with the ones from `tests/integration/setup`.
+ * Nothing here points at a real service: unit tests never open a connection, and integration
+ * suites self-skip unless the dedicated test database is reachable.
  */
 process.env = {
   ...process.env,
@@ -14,7 +14,10 @@ process.env = {
   LOG_LEVEL: "error",
 };
 process.env.APP_URL = "http://localhost:3000";
-process.env.DATABASE_URL = "postgresql://midad:midad@localhost:5433/midad_test";
+// Integration suites need a migrated, disposable database. CI passes one explicitly; the fallback
+// matches the test database exposed by the local docker test stack.
+process.env.DATABASE_URL =
+  process.env.TEST_DATABASE_URL ?? "postgresql://midad:midad@localhost:5433/midad_test";
 process.env.REDIS_URL = "redis://localhost:6380/1";
 process.env.S3_ENDPOINT = "http://localhost:9000";
 process.env.S3_ACCESS_KEY_ID = "test-access-key";
